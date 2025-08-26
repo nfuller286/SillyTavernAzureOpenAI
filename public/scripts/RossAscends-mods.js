@@ -411,6 +411,7 @@ function RA_autoconnect(PrevApi) {
                     || (secret_state[SECRET_KEYS.COMETAPI] && oai_settings.chat_completion_source == chat_completion_sources.COMETAPI)
                     || (oai_settings.chat_completion_source === chat_completion_sources.POLLINATIONS)
                     || (isValidUrl(oai_settings.custom_url) && oai_settings.chat_completion_source == chat_completion_sources.CUSTOM)
+                    || (secret_state[SECRET_KEYS.AZURE_OPENAI] && oai_settings.chat_completion_source == chat_completion_sources.AZURE_OPENAI)
                 ) {
                     $('#api_button_openai').trigger('click');
                 }
@@ -481,7 +482,7 @@ export function dragElement($elmnt) {
     let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
     let height, width, top, left, right, bottom,
         maxX, maxY, winHeight, winWidth,
-        topbar;
+        topbar, topBarFirstX, topBarLastY;
 
     const elmntName = $elmnt.attr('id');
     const elmntNameEscaped = $.escapeSelector(elmntName);
