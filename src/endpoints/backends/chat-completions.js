@@ -1200,6 +1200,7 @@ async function sendAimlapiRequest(request, response) {
  * @param {express.Request} request Express request object (contains request.body with all generate_data)
  * @param {express.Response} response Express response object
  */
+/*
 async function sendAzureOpenAIRequest(request, response) {
 
     const apiKey = readSecret(request.user.directories, SECRET_KEYS.AZURE_OPENAI);
@@ -1296,6 +1297,7 @@ async function sendAzureOpenAIRequest(request, response) {
         }
     }
 }
+*/
 
 export const router = express.Router();
 
@@ -1449,7 +1451,6 @@ router.post('/status', async function (request, statusResponse) {
                 messages: [
                     { role: 'user', content: 'Say word Hi' },
                 ],
-                max_tokens: 1,
                 stream: false,
             };
 
@@ -1677,7 +1678,7 @@ router.post('/generate', function (request, response) {
         case CHAT_COMPLETION_SOURCES.DEEPSEEK: return sendDeepSeekRequest(request, response);
         case CHAT_COMPLETION_SOURCES.AIMLAPI: return sendAimlapiRequest(request, response);
         case CHAT_COMPLETION_SOURCES.XAI: return sendXaiRequest(request, response);
-        case CHAT_COMPLETION_SOURCES.AZURE_OPENAI: return sendAzureOpenAIRequest(request, response);
+    //    case CHAT_COMPLETION_SOURCES.AZURE_OPENAI: return sendAzureOpenAIRequest(request, response);
     }
 
     let apiUrl;
@@ -1704,6 +1705,19 @@ router.post('/generate', function (request, response) {
         if (getConfigValue('openai.randomizeUserId', false, 'boolean')) {
             bodyParams['user'] = uuidv4();
         }
+    } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.AZURE_OPENAI) {
+        const { azure_base_url, azure_deployment_name, azure_api_version, reverse_proxy } = request.body;
+        const baseUrl = reverse_proxy || azure_base_url;
+        if (!baseUrl || !azure_deployment_name || !azure_api_version) {
+            console.error('Azure OpenAI configuration (Base URL, Deployment Name, API Version) is incomplete.');
+            return response.status(400).send({ error: { message: 'Azure OpenAI configuration is incomplete.' } });
+        }
+        const sanitizedBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+        apiUrl = `${sanitizedBaseUrl}/openai/deployments/${azure_deployment_name}/chat/completions?api-version=${azure_api_version}`;
+        apiKey = readSecret(request.user.directories, SECRET_KEYS.AZURE_OPENAI);
+        // Azure uses 'api-key' header instead of 'Authorization: Bearer ...'
+        headers = { 'api-key': apiKey, Authorization: undefined };
+        bodyParams = {};
     } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENROUTER) {
         apiUrl = 'https://openrouter.ai/api/v1';
         apiKey = readSecret(request.user.directories, SECRET_KEYS.OPENROUTER);
@@ -1873,8 +1887,7 @@ router.post('/generate', function (request, response) {
     }
 
     // A few of OpenAIs reasoning models support reasoning effort
-    if (request.body.reasoning_effort && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI].includes(request.body.chat_completion_source)) {
-        const reasoningEffortModels = [
+    if (request.body.reasoning_effort && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI, CHAT_COMPLETION_SOURCES.AZURE_OPENAI].includes(request.body.chat_completion_source)) {        const reasoningEffortModels = [
             'o1',
             'o3-mini',
             'o3-mini-2025-01-31',
@@ -1908,9 +1921,11 @@ router.post('/generate', function (request, response) {
     }
 
     const textPrompt = isTextCompletion ? convertTextCompletionPrompt(request.body.messages) : '';
-    const endpointUrl = isTextCompletion && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.OPENROUTER ?
-        `${apiUrl}/completions` :
-        `${apiUrl}/chat/completions`;
+    const endpointUrl = request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.AZURE_OPENAI
+        ? apiUrl // For Azure, apiUrl is the full endpoint
+        : isTextCompletion && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.OPENROUTER
+            ? `${apiUrl}/completions`
+            : `${apiUrl}/chat/completions`;
 
     const controller = new AbortController();
     request.socket.removeAllListeners('close');

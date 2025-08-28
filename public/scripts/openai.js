@@ -2094,6 +2094,7 @@ function getAimlapiModelTemplate(option) {
 function getReasoningEffort() {
     // These sources expect the effort as string.
     const reasoningEffortSources = [
+        chat_completion_sources.AZURE_OPENAI,
         chat_completion_sources.OPENAI,
         chat_completion_sources.CUSTOM,
         chat_completion_sources.XAI,
@@ -2112,7 +2113,10 @@ function getReasoningEffort() {
         case reasoning_effort_types.auto:
             return undefined;
         case reasoning_effort_types.min:
-            return chat_completion_sources.OPENAI === oai_settings.chat_completion_source && /^gpt-5/.test(oai_settings.openai_model)
+            const model = getChatCompletionModel();
+            const gpt5Sources = [chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI];
+            const isGpt5 = gpt5Sources.includes(oai_settings.chat_completion_source) && /^gpt-5/.test(model);
+            return isGpt5
                 ? reasoning_effort_types.min
                 : reasoning_effort_types.low;
         case reasoning_effort_types.max:
@@ -2209,7 +2213,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     };
 
     // Add Azure-specific settings to generate_data if Azure OpenAI is selected
-    if (isAzureOpenAI) { // Use the new isAzureOpenAI constant
+    if (isAzureOpenAI) {
         generate_data.azure_base_url = oai_settings.azure_base_url;
         generate_data.azure_deployment_name = oai_settings.azure_deployment_name;
         generate_data.azure_api_version = oai_settings.azure_api_version;
@@ -2225,26 +2229,26 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         delete generate_data.stop;
     }
 
-    // Proxy is only supported for Claude, OpenAI, Mistral, Google MakerSuite, and Vertex AI
-    if (oai_settings.reverse_proxy && [chat_completion_sources.CLAUDE, chat_completion_sources.OPENAI, chat_completion_sources.MISTRALAI, chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI, chat_completion_sources.DEEPSEEK, chat_completion_sources.XAI].includes(oai_settings.chat_completion_source)) {
+    // Proxy is only supported for Claude, OpenAI, Azure, Mistral, Google MakerSuite, and Vertex AI
+    if (oai_settings.reverse_proxy && [chat_completion_sources.CLAUDE, chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI, chat_completion_sources.MISTRALAI, chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI, chat_completion_sources.DEEPSEEK, chat_completion_sources.XAI].includes(oai_settings.chat_completion_source)) {
         await validateReverseProxy();
         generate_data['reverse_proxy'] = oai_settings.reverse_proxy;
         generate_data['proxy_password'] = oai_settings.proxy_password;
     }
 
     // Add logprobs request (currently OpenAI only, max 5 on their side)
-    if (useLogprobs && (isOAI || isCustom || isDeepSeek || isXAI || isAimlapi)) {
+    if (useLogprobs && (isOAI || isAzureOpenAI || isCustom || isDeepSeek || isXAI || isAimlapi)) {
         generate_data['logprobs'] = 5;
     }
 
     // Remove logit bias/logprobs/stop-strings if not supported by the model
     const isVision = (m) => ['gpt', 'vision'].every(x => m.includes(x));
-    if (isOAI && isVision(oai_settings.openai_model) || isOpenRouter && isVision(oai_settings.openrouter_model)) {
+    if ((isOAI || isAzureOpenAI) && isVision(model) || isOpenRouter && isVision(oai_settings.openrouter_model)) {
         delete generate_data.logit_bias;
         delete generate_data.stop;
         delete generate_data.logprobs;
     }
-    if (isOAI && oai_settings.openai_model.includes('gpt-4.5') || isOpenRouter && oai_settings.openrouter_model.includes('gpt-4.5')) {
+    if ((isOAI || isAzureOpenAI) && model.includes('gpt-4.5') || isOpenRouter && oai_settings.openrouter_model.includes('gpt-4.5')) {
         delete generate_data.logprobs;
     }
 
@@ -2372,13 +2376,14 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         chat_completion_sources.POLLINATIONS,
         chat_completion_sources.AIMLAPI,
         chat_completion_sources.VERTEXAI,
+        chat_completion_sources.AZURE_OPENAI,
         chat_completion_sources.MAKERSUITE,
     ];
     if (seedSupportedSources.includes(oai_settings.chat_completion_source) && oai_settings.seed >= 0) {
         generate_data['seed'] = oai_settings.seed;
     }
 
-    if (isOAI && /^(o1|o3|o4)/.test(oai_settings.openai_model)) {
+    if ((isOAI || isAzureOpenAI) && /^(o1|o3|o4)/.test(model)) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
@@ -2389,7 +2394,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         delete generate_data.top_p;
         delete generate_data.frequency_penalty;
         delete generate_data.presence_penalty;
-        if (oai_settings.openai_model.startsWith('o1')) {
+        if (model.startsWith('o1')) {
             generate_data.messages.forEach((msg) => {
                 if (msg.role === 'system') {
                     msg.role = 'user';
@@ -2401,12 +2406,12 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         }
     }
 
-    if (isOAI && /^gpt-5/.test(oai_settings.openai_model)) {
+    if ((isOAI || isAzureOpenAI) && /^gpt-5/.test(model)) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
         delete generate_data.top_logprobs;
-        if (/chat-latest/.test(oai_settings.openai_model)) {
+        if (/chat-latest/.test(model)) {
             delete generate_data.tools;
             delete generate_data.tool_choice;
         } else {
@@ -5617,6 +5622,11 @@ export function isImageInliningSupported() {
             return visionSupportedModels.some(model =>
                 oai_settings.openai_model.includes(model)
                 && ['gpt-4-turbo-preview', 'o1-mini', 'o3-mini'].some(x => !oai_settings.openai_model.includes(x)),
+            );
+        case chat_completion_sources.AZURE_OPENAI:
+            return visionSupportedModels.some(model =>
+                oai_settings.azure_openai_model.includes(model)
+                && ['gpt-4-turbo-preview', 'o1-mini', 'o3-mini'].some(x => !oai_settings.azure_openai_model.includes(x)),
             );
         case chat_completion_sources.MAKERSUITE:
             return visionSupportedModels.some(model => oai_settings.google_model.includes(model));
